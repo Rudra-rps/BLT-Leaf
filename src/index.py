@@ -1383,7 +1383,11 @@ def calculate_pr_readiness(pr_data, review_classification, review_score):
     }
 
 async def upsert_pr(db, pr_url, owner, repo, pr_number, pr_data):
-    """Helper to insert or update PR in database (Deduplicates logic)"""
+    """Helper to insert or update PR in database (Deduplicates logic)
+    
+    Returns:
+        int: PR ID from database
+    """
     current_timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     
     stmt = db.prepare('''
@@ -1429,7 +1433,110 @@ async def upsert_pr(db, pr_url, owner, repo, pr_number, pr_data):
         pr_data['last_updated_at'], current_timestamp, current_timestamp,
         pr_data.get('is_draft', 0)
     )
-    await stmt.run()
+    result = await stmt.run()
+    
+    # Get the PR ID - either from insert or from existing record
+    pr_record = await db.prepare(
+        'SELECT id FROM prs WHERE pr_url = ?'
+    ).bind(pr_url).first()
+    
+    return pr_record.to_py()['id'] if pr_record else None
+
+async def analyze_and_save_pr_readiness(env, pr_id, owner, repo, pr_number, author_login):
+    """Helper function to analyze PR readiness and save to database.
+    
+    Args:
+        env: Worker environment
+        pr_id: PR database ID
+        owner: Repository owner
+        repo: Repository name
+        pr_number: PR number
+        author_login: PR author username
+        
+    Returns:
+        dict: Readiness analysis data or None if error
+    """
+    try:
+        print(f"Auto-analyzing PR {pr_id} ({owner}/{repo}#{pr_number})...")
+        
+        # Get PR from database (needed for checks data)
+        db = get_db(env)
+        pr_record = await db.prepare(
+            'SELECT * FROM prs WHERE id = ?'
+        ).bind(pr_id).first()
+        
+        if not pr_record:
+            print(f"Error: PR {pr_id} not found in database")
+            return None
+            
+        pr = pr_record.to_py()
+        
+        # Fetch timeline data from GitHub
+        timeline_data = await fetch_pr_timeline_data(owner, repo, pr_number)
+        
+        # Build unified timeline
+        timeline = build_pr_timeline(timeline_data)
+        
+        # Analyze review progress
+        review_data = analyze_review_progress(timeline, author_login)
+        
+        # Classify review health
+        review_classification, review_score = classify_review_health(review_data)
+        
+        # Calculate combined readiness
+        readiness = calculate_pr_readiness(pr, review_classification, review_score)
+        
+        # Build response data structure
+        response_data = {
+            'pr': {
+                'id': pr['id'],
+                'title': pr['title'],
+                'author': pr['author_login'],
+                'repo': f"{pr['repo_owner']}/{pr['repo_name']}",
+                'number': pr['pr_number'],
+                'state': pr['state'],
+                'is_merged': pr['is_merged'] == 1,
+                'mergeable_state': pr['mergeable_state'],
+                'files_changed': pr['files_changed']
+            },
+            'readiness': {
+                **readiness,
+                'overall_score_display': f"{readiness['overall_score']}%",
+                'ci_score_display': f"{readiness['ci_score']}%",
+                'review_score_display': f"{readiness.get('review_score', review_score)}%"
+            },
+            'review_health': {
+                'classification': review_classification,
+                'score': review_score,
+                'score_display': f"{review_score}%",
+                'total_feedback': review_data['total_feedback_count'],
+                'responded_feedback': review_data['responded_count'],
+                'response_rate': review_data['response_rate'],
+                'response_rate_display': f"{int(review_data['response_rate'] * 100)}%",
+                'stale_feedback_count': len(review_data['stale_feedback']),
+                'stale_feedback': review_data['stale_feedback']
+            },
+            'ci_checks': {
+                'passed': pr['checks_passed'],
+                'failed': pr['checks_failed'],
+                'skipped': pr['checks_skipped']
+            }
+        }
+        
+        # Save to database
+        await save_readiness_to_db(env, pr_id, response_data)
+        
+        # Cache the result
+        await set_readiness_cache(env, pr_id, response_data)
+        
+        print(f"Successfully auto-analyzed PR {pr_id}")
+        return response_data
+        
+    except Exception as e:
+        print(f"Error during auto-analysis of PR {pr_id}: {type(e).__name__}: {str(e)}")
+        # Don't fail the whole request if analysis fails
+        return None
+
 
 async def handle_add_pr(request, env):
     """
@@ -1439,6 +1546,11 @@ async def handle_add_pr(request, env):
     - Malformed JSON error handling
     - Type validation for pr_url parameter
     - Proper error handling for parse_pr_url ValueError
+    
+    Auto-Analysis Feature:
+    - Automatically analyzes PR readiness after adding (single PR mode only)
+    - Populates REVIEW/RESPONSE/FEEDBACK columns immediately
+    - Gracefully handles analysis failures without blocking PR addition
     """
     try:
         # Handle malformed JSON gracefully
@@ -1544,9 +1656,38 @@ async def handle_add_pr(request, env):
                 return Response.new(json.dumps({'error': 'Cannot add merged/closed PRs'}), 
                                   {'status': 400, 'headers': {'Content-Type': 'application/json'}})
             
-            await upsert_pr(db, pr_url, parsed['owner'], parsed['repo'], parsed['pr_number'], pr_data)
+            # Insert/update PR in database and get PR ID
+            pr_id = await upsert_pr(db, pr_url, parsed['owner'], parsed['repo'], parsed['pr_number'], pr_data)
             
-            return Response.new(json.dumps({'success': True, 'data': pr_data}), 
+            if not pr_id:
+                return Response.new(json.dumps({'error': 'Failed to save PR to database'}), 
+                                  {'status': 500, 'headers': {'Content-Type': 'application/json'}})
+            
+            # Auto-analyze PR readiness (non-blocking - analysis failures won't fail the request)
+            readiness_data = await analyze_and_save_pr_readiness(
+                env,
+                pr_id,
+                parsed['owner'],
+                parsed['repo'],
+                parsed['pr_number'],
+                pr_data['author_login']
+            )
+            
+            # Return success with optional readiness data
+            response_payload = {
+                'success': True,
+                'data': pr_data,
+                'pr_id': pr_id
+            }
+            
+            if readiness_data:
+                response_payload['readiness'] = readiness_data
+                response_payload['auto_analyzed'] = True
+            else:
+                response_payload['auto_analyzed'] = False
+                response_payload['message'] = 'PR added successfully, but auto-analysis was skipped or failed'
+            
+            return Response.new(json.dumps(response_payload), 
                               {'headers': {'Content-Type': 'application/json'}})
 
     except Exception as e:

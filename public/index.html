@@ -1205,7 +1205,8 @@
             }
 
             btn.disabled = true;
-            btn.textContent = addAll ? 'Importing...' : 'Adding...';
+            // Show analyzing message for single PRs
+            btn.textContent = addAll ? 'Importing...' : 'Adding & Analyzing...';
 
             try {
                 // If importing all, handle logic to send repo_url appropriately
@@ -1226,6 +1227,12 @@
                     showInputError('prUrlInput', data.error);
                 } else {
                     input.value = '';
+                    // Show success message with analysis status
+                    if (data.auto_analyzed && !addAll) {
+                        console.log('PR added and automatically analyzed');
+                    } else if (data.message) {
+                        console.log(data.message);
+                    }
                     await loadRepos();
                     await loadPrs();
                     await loadRateLimit();
