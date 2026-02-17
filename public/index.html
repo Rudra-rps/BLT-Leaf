@@ -7,13 +7,15 @@
     <title>PR Readiness Checker - BLT-Leaf</title>
     <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class'
+        window.tailwind = {
+            config: {
+                darkMode: 'class'
+            }
         }
     </script>
     <!-- Font Awesome -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
         /* Fallback visibility if CDN is blocked */
@@ -21,6 +23,17 @@
             background: #E10000;
             color: #fff;
             border: 1px solid #BC0000;
+        }
+        
+        /* Active PR row highlighting */
+        .pr-row-active {
+            background-color: #FEF3C7 !important;
+            border-left: 3px solid #F59E0B;
+        }
+        
+        .dark .pr-row-active {
+            background-color: #78350F !important;
+            border-left: 3px solid #F59E0B;
         }
     </style>
 </head>
@@ -41,21 +54,38 @@
                         <div class="h-full w-0 rounded-full bg-green-500 transition-all duration-300" id="rateLimitFill"></div>
                     </div>
                     <span class="text-[10px] font-semibold text-slate-500 dark:text-slate-400" id="rateLimitText">N/A</span>
+                    <span class="text-[10px] text-slate-400 dark:text-slate-500" id="rateLimitUsed"></span>
+                    <span class="text-[10px] text-slate-400 dark:text-slate-500" id="rateLimitReset"></span>
                 </div>
             </div>
 
             <div class="flex flex-1 items-center justify-center px-4 md:px-8 lg:px-12">
-                <div class="relative w-full max-w-lg">
-                    <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                        <i class="fas fa-search text-slate-400"></i>
+                <div class="flex w-full max-w-lg gap-2">
+                    <div class="relative flex-1">
+                        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                            <i class="fas fa-search text-slate-400"></i>
+                        </div>
+                        <input type="text" id="prSearchInput"
+                            class="block w-full rounded-md border border-[#e74c3c] bg-slate-50 py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-500 dark:border-[#e74c3c] dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-red-500 transition-colors shadow-sm"
+                            placeholder="Search PRs..." autocomplete="off">
                     </div>
-                    <input type="text" id="prSearchInput"
-                        class="block w-full rounded-md border border-[#e74c3c] bg-slate-50 py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-500 dark:border-[#e74c3c] dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-red-500 transition-colors shadow-sm"
-                        placeholder="Search PRs..." autocomplete="off">
+                    <button id="searchBtn" 
+                        class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-colors shadow-sm whitespace-nowrap">
+                        <i class="fas fa-search"></i> Search
+                    </button>
+                    <button id="clearSearchBtn" 
+                        class="rounded-md bg-slate-500 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-slate-400 transition-colors shadow-sm whitespace-nowrap">
+                        <i class="fas fa-times"></i> Clear
+                    </button>
                 </div>
             </div>
 
             <div class="flex shrink-0 items-center gap-3">
+                <button id="autoRefreshToggle" 
+                    class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:text-slate-400 dark:hover:bg-slate-700 dark:focus:ring-slate-600 transition-colors"
+                    title="Toggle auto-refresh">
+                    <i class="fas fa-sync-alt" id="autoRefreshIcon"></i>
+                </button>
                 <button id="themeToggle" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:text-slate-400 dark:hover:bg-slate-700 dark:focus:ring-slate-600">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
@@ -127,8 +157,18 @@
         let repos = [];
         let sortColumn = localStorage.getItem('sortColumn') || 'ready_score';
         let sortDirection = localStorage.getItem('sortDirection') || 'desc';
-        let secondarySortColumn = null;
-        let secondarySortDirection = 'desc';
+        let secondarySortColumn = localStorage.getItem('secondarySortColumn') || null;
+        let secondarySortDirection = localStorage.getItem('secondarySortDirection') || 'desc';
+        let currentPage = 1;
+        let totalPages = 1;
+        const perPage = 30;
+        let activePrId = null; // Track the currently active/selected PR
+
+        // Auto-refresh state
+        let autoRefreshEnabled = localStorage.getItem('autoRefreshEnabled') !== 'false'; // enabled by default
+        let autoRefreshInterval = null;
+        let prUpdateTimestamps = {}; // Track PR update timestamps for change detection
+        const AUTO_REFRESH_INTERVAL = 30000; // 30 seconds
 
         // Helper functions for readiness data persistence
         function saveReadinessData(prId, readiness, reviewHealth) {
@@ -200,24 +240,35 @@
 
         async function loadRateLimit() {
             try {
+                const MS_PER_MINUTE = 60000;
+                const MINUTES_PER_HOUR = 60;
+                
                 const response = await fetch('/api/rate-limit');
                 const textEl = document.getElementById('rateLimitText');
                 const fillEl = document.getElementById('rateLimitFill');
+                const usedEl = document.getElementById('rateLimitUsed');
+                const resetEl = document.getElementById('rateLimitReset');
 
                 if (!response.ok) {
                     if(textEl) textEl.textContent = 'N/A';
+                    if(usedEl) usedEl.textContent = '';
+                    if(resetEl) resetEl.textContent = '';
                     return;
                 }
 
                 const data = await response.json();
                 if (data.error) {
                     if(textEl) textEl.textContent = 'N/A';
+                    if(usedEl) usedEl.textContent = '';
+                    if(resetEl) resetEl.textContent = '';
                     return;
                 }
 
-                const { limit, remaining } = data;
+                const { limit, remaining, used, reset } = data;
                 if (typeof limit !== 'number' || typeof remaining !== 'number') {
                     if(textEl) textEl.textContent = 'N/A';
+                    if(usedEl) usedEl.textContent = '';
+                    if(resetEl) resetEl.textContent = '';
                     return;
                 }
 
@@ -236,11 +287,42 @@
                 }
                 
                 if(textEl) textEl.textContent = `${remaining} / ${limit}`;
+                
+                // Display used count
+                if(usedEl && typeof used === 'number') {
+                    usedEl.textContent = `(${used} used)`;
+                }
+                
+                // Display reset time in human-readable format
+                if(resetEl && typeof reset === 'number') {
+                    const resetDate = new Date(reset * 1000);
+                    const now = new Date();
+                    const diffMs = resetDate - now;
+                    const diffMins = Math.floor(diffMs / MS_PER_MINUTE);
+                    
+                    if (diffMins <= 0) {
+                        resetEl.textContent = 'Resets soon';
+                    } else if (diffMins < MINUTES_PER_HOUR) {
+                        resetEl.textContent = `Resets in ${diffMins}m`;
+                    } else {
+                        const diffHours = Math.floor(diffMins / MINUTES_PER_HOUR);
+                        const remainingMins = diffMins % MINUTES_PER_HOUR;
+                        if (remainingMins === 0) {
+                            resetEl.textContent = `Resets in ${diffHours}h`;
+                        } else {
+                            resetEl.textContent = `Resets in ${diffHours}h ${remainingMins}m`;
+                        }
+                    }
+                }
 
             } catch (error) {
                 console.error('Error loading rate limit:', error);
                 const textEl = document.getElementById('rateLimitText');
+                const usedEl = document.getElementById('rateLimitUsed');
+                const resetEl = document.getElementById('rateLimitReset');
                 if(textEl) textEl.textContent = 'N/A';
+                if(usedEl) usedEl.textContent = '';
+                if(resetEl) resetEl.textContent = '';
             }
         }
 
@@ -287,16 +369,25 @@
         }
 
         function sortPrs(column, isShiftClick = false) {
-            // Handle shift+click for secondary sort
+            // Shift+click adds secondary sort column
             if (isShiftClick) {
+                // If clicking the same column as primary, do nothing
+                if (column === sortColumn) {
+                    return;
+                }
+                
+                // If clicking the current secondary column, toggle its direction
                 if (secondarySortColumn === column) {
-                    // Toggle direction of secondary sort
                     secondarySortDirection = secondarySortDirection === 'asc' ? 'desc' : 'asc';
                 } else {
-                    // Set as new secondary sort column
+                    // Set new secondary sort column
                     secondarySortColumn = column;
                     secondarySortDirection = 'desc';
                 }
+                
+                // Save secondary sorting state to localStorage
+                localStorage.setItem('secondarySortColumn', secondarySortColumn);
+                localStorage.setItem('secondarySortDirection', secondarySortDirection);
             } else {
                 // Regular click - set as primary sort
                 if (sortColumn === column) {
@@ -305,68 +396,17 @@
                     sortColumn = column;
                     sortDirection = 'desc';
                 }
-                // If the new primary sort was the secondary sort, clear secondary
-                if (secondarySortColumn === column) {
-                    secondarySortColumn = null;
-                }
+                
+                // Save primary sorting state to localStorage
+                localStorage.setItem('sortColumn', sortColumn);
+                localStorage.setItem('sortDirection', sortDirection);
             }
             
-            // Save sorting state to localStorage
-            localStorage.setItem('sortColumn', sortColumn);
-            localStorage.setItem('sortDirection', sortDirection);
+            // Reset to first page when sorting changes
+            currentPage = 1;
             
-            // Columns that should use numeric sorting
-            const numericColumns = ['files_changed', 'commits_count', 'behind_by', 'checks_passed', 'checks_failed', 'checks_skipped', 'pr_number', 'ready_score', 'ci_score', 'review_score', 'response_score', 'feedback_score', 'issues_count'];
-
-            allPrs.sort((a, b) => {
-                // Primary sort comparison
-                let aVal = a[sortColumn];
-                let bVal = b[sortColumn];
-                
-                // Handle numeric columns
-                if (numericColumns.includes(sortColumn)) {
-                    aVal = Number(aVal) || 0;
-                    bVal = Number(bVal) || 0;
-                }
-                // Handle string comparisons for all other columns 
-                else {
-                    aVal = String(aVal || '').toLowerCase();
-                    bVal = String(bVal || '').toLowerCase();
-                }
-                
-                let result;
-                if (sortDirection === 'asc') {
-                    result = aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
-                } else {
-                    result = aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
-                }
-                
-                // If primary sort values are equal and secondary sort is set, use secondary sort
-                if (result === 0 && secondarySortColumn) {
-                    let aSecVal = a[secondarySortColumn];
-                    let bSecVal = b[secondarySortColumn];
-                    
-                    if (numericColumns.includes(secondarySortColumn)) {
-                        aSecVal = Number(aSecVal) || 0;
-                        bSecVal = Number(bSecVal) || 0;
-                    } else {
-                        aSecVal = String(aSecVal || '').toLowerCase();
-                        bSecVal = String(bSecVal || '').toLowerCase();
-                    }
-                    
-                    if (secondarySortDirection === 'asc') {
-                        result = aSecVal > bSecVal ? 1 : aSecVal < bSecVal ? -1 : 0;
-                    } else {
-                        result = aSecVal < bSecVal ? 1 : aSecVal > bSecVal ? -1 : 0;
-                    }
-                }
-                
-                return result;
-            });
-            
-            // Re-apply filter after sorting
-            const searchTerm = document.getElementById('prSearchInput').value;
-            filterPrs(searchTerm);
+            // Reload PRs from server with new sort parameters
+            loadPrs();
         }
 
         function showInlineError(rowId, message) {
@@ -505,6 +545,7 @@
                 `;
 
                 li.addEventListener('click', () => {
+                    currentPage = 1;
                     currentRepo = li.dataset.repo;
                     localStorage.setItem('currentRepo', currentRepo);
                     document.querySelectorAll('.repo-item').forEach(item => {
@@ -530,7 +571,23 @@
             }
 
             try {
-                const url = currentRepo === 'all' ? '/api/prs' : `/api/prs?repo=${encodeURIComponent(currentRepo)}`;
+                // Build sort parameters - support multiple columns
+                let sortByParam = sortColumn;
+                let sortDirParam = sortDirection;
+                
+                if (secondarySortColumn) {
+                    sortByParam += ',' + secondarySortColumn;
+                    sortDirParam += ',' + secondarySortDirection;
+                }
+                
+                // Build URL with pagination and sorting parameters
+                let url;
+                if (currentRepo === 'all') {
+                    url = `/api/prs?page=${currentPage}&sort_by=${sortByParam}&sort_dir=${sortDirParam}`;
+                } else {
+                    url = `/api/prs?repo=${encodeURIComponent(currentRepo)}&page=${currentPage}&sort_by=${sortByParam}&sort_dir=${sortDirParam}`;
+                }
+                
                 const response = await fetch(url);
                 const data = await response.json();
 
@@ -540,8 +597,14 @@
                 }
 
                 allPrs = data.prs;
-                
-                // Attach readiness data from database or localStorage to each PR for sorting
+                if (data.pagination) {
+                    totalPages = data.pagination.total_pages;
+                    if (currentPage > totalPages && totalPages > 0) {
+                        currentPage = totalPages;
+                    }
+                }
+
+                // Attach readiness data from localStorage to each PR for display and computed columns
                 allPrs.forEach(pr => {
                     // First, try to get readiness data from database (if it exists)
                     if (pr.overall_score !== null && pr.overall_score !== undefined) {
@@ -574,26 +637,20 @@
                     }
                 });
                 
-                // Apply initial sort based on saved preferences or defaults
-                const numericColumns = ['files_changed', 'commits_count', 'behind_by', 'checks_passed', 'checks_failed', 'checks_skipped', 'pr_number', 'ready_score', 'ci_score', 'review_score', 'response_score', 'feedback_score', 'issues_count'];
-                allPrs.sort((a, b) => {
-                    let aVal = a[sortColumn];
-                    let bVal = b[sortColumn];
-                    
-                    if (numericColumns.includes(sortColumn)) {
-                        aVal = Number(aVal) || 0;
-                        bVal = Number(bVal) || 0;
-                    } else {
-                        aVal = String(aVal || '').toLowerCase();
-                        bVal = String(bVal || '').toLowerCase();
-                    }
-                    
-                    if (sortDirection === 'asc') {
-                        return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
-                    } else {
-                        return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
-                    }
-                });
+                // Only apply client-side sorting for computed columns (issues_count)
+                // All other columns are already sorted by the backend
+                if (sortColumn === 'issues_count') {
+                    allPrs.sort((a, b) => {
+                        let aVal = Number(a.issues_count) || 0;
+                        let bVal = Number(b.issues_count) || 0;
+                        
+                        if (sortDirection === 'asc') {
+                            return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+                        } else {
+                            return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+                        }
+                    });
+                }
                 
                 // Apply search filter if exists
                 const searchTerm = document.getElementById('prSearchInput').value;
@@ -619,10 +676,177 @@
             renderPrList(filtered);
         }
 
+        /**
+         * Check for PR updates by fetching lightweight timestamp data
+         * Compare with local cache to detect changes
+         */
+        async function checkForPrUpdates() {
+            if (!autoRefreshEnabled) return;
+            
+            try {
+                const response = await fetch('/api/prs/updates');
+                const data = await response.json();
+                
+                if (data.error) {
+                    console.error('Error checking for updates:', data.error);
+                    return;
+                }
+                
+                const updates = data.updates || [];
+                const changedPrIds = [];
+                const removedPrIds = [];
+                
+                // Detect changes
+                updates.forEach(update => {
+                    const oldTimestamp = prUpdateTimestamps[update.id];
+                    if (oldTimestamp && oldTimestamp !== update.updated_at) {
+                        changedPrIds.push(update.id);
+                    }
+                    prUpdateTimestamps[update.id] = update.updated_at;
+                });
+                
+                // Detect removals (PRs that were in cache but not in update)
+                // Use Set for O(1) lookup instead of O(n) find operation
+                const currentPrIds = new Set(updates.map(u => u.id));
+                Object.keys(prUpdateTimestamps).forEach(prId => {
+                    const prIdNum = parseInt(prId);
+                    if (!currentPrIds.has(prIdNum)) {
+                        removedPrIds.push(prIdNum);
+                        delete prUpdateTimestamps[prId];
+                    }
+                });
+                
+                // Handle removed PRs with animation
+                if (removedPrIds.length > 0) {
+                    for (const prId of removedPrIds) {
+                        await removePrWithAnimation(prId);
+                    }
+                }
+                
+                // Reload if there are changes or removals
+                if (changedPrIds.length > 0 || removedPrIds.length > 0) {
+                    console.log('PR updates detected, refreshing...');
+                    await loadPrs();
+                    await loadRepos(); // Update repo counts
+                }
+            } catch (error) {
+                console.error('Error checking for PR updates:', error);
+            }
+        }
+
+        /**
+         * Remove a PR from the UI with animation
+         */
+        async function removePrWithAnimation(prId) {
+            // Remove from allPrs array
+            const prIndex = allPrs.findIndex(pr => pr.id === prId);
+            if (prIndex !== -1) {
+                allPrs.splice(prIndex, 1);
+            }
+            
+            // Get the row element
+            const row = document.getElementById(`pr-row-${prId}`);
+            if (row) {
+                // Add fade-out animation
+                row.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
+                row.style.opacity = '0';
+                row.style.transform = 'translateX(20px)';
+                
+                // Remove the row after animation completes
+                await new Promise(resolve => setTimeout(resolve, 300));
+                row.remove();
+            }
+        }
+
+        /**
+         * Start auto-refresh polling
+         */
+        async function startAutoRefresh() {
+            if (autoRefreshInterval) return; // Already running
+            
+            autoRefreshEnabled = true;
+            localStorage.setItem('autoRefreshEnabled', 'true');
+            
+            // Initial check (await to handle errors properly)
+            await checkForPrUpdates();
+            
+            // Set up interval
+            autoRefreshInterval = setInterval(checkForPrUpdates, AUTO_REFRESH_INTERVAL);
+            
+            // Update UI
+            updateAutoRefreshUI();
+        }
+
+        /**
+         * Stop auto-refresh polling
+         */
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+            
+            autoRefreshEnabled = false;
+            localStorage.setItem('autoRefreshEnabled', 'false');
+            
+            // Update UI
+            updateAutoRefreshUI();
+        }
+
+        /**
+         * Toggle auto-refresh on/off
+         */
+        function toggleAutoRefresh() {
+            if (autoRefreshEnabled) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+            }
+        }
+
+        /**
+         * Update the auto-refresh button appearance
+         */
+        function updateAutoRefreshUI() {
+            const button = document.getElementById('autoRefreshToggle');
+            const icon = document.getElementById('autoRefreshIcon');
+            
+            if (autoRefreshEnabled) {
+                button.classList.add('text-green-600', 'dark:text-green-400');
+                button.classList.remove('text-slate-500', 'dark:text-slate-400');
+                icon.classList.add('fa-spin');
+                button.title = 'Auto-refresh enabled (click to disable)';
+            } else {
+                button.classList.remove('text-green-600', 'dark:text-green-400');
+                button.classList.add('text-slate-500', 'dark:text-slate-400');
+                icon.classList.remove('fa-spin');
+                button.title = 'Auto-refresh disabled (click to enable)';
+            }
+        }
+
+        /**
+         * Pause auto-refresh when tab is not visible (optimization)
+         */
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                // Clear interval when tab is hidden
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            } else {
+                // Resume polling when tab becomes visible (only if auto-refresh is enabled)
+                if (autoRefreshEnabled && !autoRefreshInterval) {
+                    autoRefreshInterval = setInterval(checkForPrUpdates, AUTO_REFRESH_INTERVAL);
+                    checkForPrUpdates(); // Check immediately on tab becoming visible
+                }
+            }
+        });
+
         function renderPrList(prsToRender) {
             const container = document.getElementById('prListContainer');
             // Use the passed filtered list OR fallback to allPrs
-            const prs = prsToRender || allPrs;
+            const prs = prsToRender || allPrs || [];
 
             if (prs.length === 0) {
                 const isFiltered = document.getElementById('prSearchInput').value.trim() !== '';
@@ -766,7 +990,7 @@
             }
 
             const tbody = document.getElementById('prTableBody');
-            allPrs.forEach(pr => {
+            prs.forEach(pr => {
                 const row = createPrRow(pr);
                 tbody.appendChild(row);
 
@@ -839,7 +1063,61 @@
                     await updatePr(prId, e.currentTarget);
                 });
             });
+            if (document.getElementById('prSearchInput').value.trim() === '') {
+                renderPagination();
         }
+        }
+
+        function renderPagination() {
+            const container = document.getElementById('prListContainer');
+
+            // Remove existing pagination if present
+            const existing = container.querySelector('.pagination-wrapper');
+            if (existing) existing.remove();
+
+            const paginationDiv = document.createElement('div');
+            paginationDiv.className = 'pagination-wrapper flex items-center justify-between mt-4';
+
+            paginationDiv.innerHTML = `
+                <div class="text-sm text-slate-600 dark:text-slate-400">
+                    Page <span class="font-semibold">${currentPage}</span> of <span class="font-semibold">${totalPages}</span>
+                </div>
+            <div class="flex gap-2">
+                <button 
+                    ${currentPage === 1 ? 'disabled' : ''} 
+                    class="px-4 py-2 rounded-lg border text-sm font-semibold transition-all
+                           ${currentPage === 1 
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-700 dark:text-slate-500'
+                            : 'bg-white hover:bg-red-50 border-slate-300 hover:border-red-300 dark:bg-slate-800 dark:hover:bg-slate-700'}"
+                    id="prevPageBtn"> ← Previous
+                </button>
+
+                <button 
+                    ${currentPage === totalPages ? 'disabled' : ''} 
+                    class="px-4 py-2 rounded-lg border text-sm font-semibold transition-all
+                            ${currentPage === totalPages 
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-700 dark:text-slate-500'
+                            : 'bg-white hover:bg-red-50 border-slate-300 hover:border-red-300 dark:bg-slate-800 dark:hover:bg-slate-700'}"
+                    id="nextPageBtn"> Next →
+                </button>
+            </div>
+        `;
+
+        container.appendChild(paginationDiv);
+
+        document.getElementById('prevPageBtn')?.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                loadPrs();
+            }
+        });
+        document.getElementById('nextPageBtn')?.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+                currentPage++;
+                loadPrs();
+            }
+        });
+    }
 
         function createPrRow(pr) {
             let stateBadge = '';
@@ -954,6 +1232,32 @@
                     </button>
                 </td>
             `;
+            
+            // Add click handler to highlight the row when clicked
+            row.addEventListener('click', (e) => {
+                // Don't trigger row selection if clicking on the update button or links
+                if (e.target.closest('button') || e.target.closest('a')) {
+                    return;
+                }
+                
+                // Remove active class from previously selected row
+                if (activePrId) {
+                    const previousActiveRow = document.getElementById(`pr-row-${activePrId}`);
+                    if (previousActiveRow) {
+                        previousActiveRow.classList.remove('pr-row-active');
+                    }
+                }
+                
+                // Set new active row
+                activePrId = pr.id;
+                row.classList.add('pr-row-active');
+            });
+            
+            // If this is the currently active PR, apply the active class
+            if (activePrId === pr.id) {
+                row.classList.add('pr-row-active');
+            }
+            
             return row;
         }
 
@@ -1248,7 +1552,28 @@
 
         // Search listener
         document.getElementById('prSearchInput').addEventListener('input', (e) => {
+            currentPage = 1;
             filterPrs(e.target.value);
+        });
+
+        // Search button listener
+        document.getElementById('searchBtn').addEventListener('click', () => {
+            const searchTerm = document.getElementById('prSearchInput').value;
+            filterPrs(searchTerm);
+        });
+
+        // Clear button listener
+        document.getElementById('clearSearchBtn').addEventListener('click', () => {
+            document.getElementById('prSearchInput').value = '';
+            filterPrs('');
+        });
+
+        // Allow Enter key to trigger search
+        document.getElementById('prSearchInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const searchTerm = document.getElementById('prSearchInput').value;
+                filterPrs(searchTerm);
+            }
         });
 
         document.getElementById('addPrBtn').addEventListener('click', addPr);
@@ -1258,6 +1583,7 @@
 
         document.querySelector('[data-repo="all"]').addEventListener('click', () => {
             currentRepo = 'all';
+            currentPage = 1;
             localStorage.setItem('currentRepo', currentRepo);
             document.querySelectorAll('.repo-item').forEach(item => {
                 setRepoItemActiveState(item, item.dataset.repo === currentRepo);
@@ -1296,6 +1622,7 @@
         }
 
         document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+        document.getElementById('autoRefreshToggle').addEventListener('click', toggleAutoRefresh);
 
         // Make sortPrs globally accessible for onclick handlers
         window.sortPrs = sortPrs;
@@ -1306,6 +1633,12 @@
         loadRepos();
         loadPrs();
         setInterval(loadRateLimit, 600000);
+        
+        // Initialize auto-refresh
+        updateAutoRefreshUI();
+        if (autoRefreshEnabled) {
+            startAutoRefresh();
+        }
     </script>
 </body>
 </html>
