@@ -31,38 +31,47 @@
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
-        #mainContentArea {
-            transition: margin-right 0.2s ease;
+        html,
+        body {
+            height: 100%;
         }
 
-        #mainContentArea.panel-open {
-            margin-right: 360px;
+        #mainContentArea {
+            overflow: hidden;
+            min-height: 0;
+            height: var(--main-content-height, auto);
+        }
+
+        #analysisLayout {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        #prListPane {
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            overflow-anchor: auto;
+            flex: 1;
         }
 
         #prDetailPanel {
-            position: fixed;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 360px;
-            z-index: 45;
             display: flex;
             flex-direction: column;
             background: #fff;
-            border-left: 1px solid #e2e8f0;
-            box-shadow: -4px 0 18px rgba(15, 23, 42, 0.12);
-            transform: translateX(100%);
-            transition: transform 0.2s ease;
-        }
-
-        #prDetailPanel.open {
-            transform: translateX(0);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            min-height: 220px;
+            max-height: calc(100vh - var(--panel-top-offset, 64px) - 16px);
         }
 
         .dark #prDetailPanel {
             background: #0f172a;
-            border-left-color: #334155;
-            box-shadow: -4px 0 20px rgba(2, 6, 23, 0.55);
+            border-color: #334155;
         }
 
         .panel-header {
@@ -82,6 +91,25 @@
             flex: 1;
             overflow-y: auto;
             padding: 12px;
+        }
+
+        #repoSidebar {
+            overflow-y: auto;
+        }
+
+        #mainColumn {
+            overflow: hidden;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #prListContainer {
+            contain: layout style paint;
+        }
+
+        .pr-table-scroll {
+            max-height: 60vh;
         }
 
         .pr-row-select {
@@ -130,13 +158,21 @@
             flex-shrink: 0;
         }
 
-        @media (max-width: 1024px) {
-            #prDetailPanel {
-                width: 100%;
+        @media (min-width: 1024px) {
+            #analysisLayout {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 360px;
+                align-items: start;
+                min-height: 0;
             }
 
-            #mainContentArea.panel-open {
-                margin-right: 0;
+            #prDetailPanel {
+                position: sticky;
+                top: var(--panel-top-offset, 64px);
+            }
+
+            #closePanelBtn {
+                display: none;
             }
         }
 
@@ -384,7 +420,7 @@
     </style>
 </head>
 
-<body class="flex min-h-screen flex-col bg-slate-50 text-slate-900 antialiased dark:bg-slate-900 dark:text-slate-100">
+<body class="flex min-h-screen flex-col overflow-hidden bg-slate-50 text-slate-900 antialiased dark:bg-slate-900 dark:text-slate-100">
     <header class="sticky top-0 z-30 border-b border-slate-200 bg-white px-5 dark:border-slate-700 dark:bg-slate-800">
         <div class="mx-auto flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
 
@@ -469,7 +505,7 @@
     </div>
 
     <div id="mainContentArea" class="mx-auto flex min-h-0 w-full flex-1 flex-col md:flex-row">
-        <aside
+        <aside id="repoSidebar"
             class="w-full border-b border-slate-200 bg-white md:w-72 md:border-b-0 md:border-r dark:border-slate-700 dark:bg-slate-800">
             <div class="p-4">
                 <h2 class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
@@ -486,7 +522,7 @@
             </div>
         </aside>
 
-        <main id="mainColumn" class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        <main id="mainColumn" class="min-h-0 flex-1 overflow-hidden p-4 sm:p-6">
             <section class="mb-6 space-y-3">
                 <div class="flex w-full max-w-4xl flex-col gap-2 sm:flex-row">
                     <input type="text" id="prUrlInput"
@@ -508,33 +544,36 @@
                 </div>
             </section>
 
-            <div id="prListContainer">
-                <div
-                    class="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-600 dark:bg-slate-800">
-                    <h3 class="text-xl font-semibold text-slate-900 dark:text-slate-100">No PRs Added Yet</h3>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Add a GitHub PR URL above to start
-                        tracking</p>
+            <div id="analysisLayout">
+                <div id="prListPane">
+                    <div id="prListContainer">
+                        <div
+                            class="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-600 dark:bg-slate-800">
+                            <h3 class="text-xl font-semibold text-slate-900 dark:text-slate-100">No PRs Added Yet</h3>
+                            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Add a GitHub PR URL above to start
+                                tracking</p>
+                        </div>
+                    </div>
                 </div>
+                <aside id="prDetailPanel">
+                    <div class="panel-header">
+                        <div class="min-w-0">
+                            <div id="panelPrTitle" class="truncate text-xs font-bold text-slate-900 dark:text-slate-100">Select a PR</div>
+                            <a id="panelPrLink" href="#" target="_blank" rel="noopener noreferrer"
+                                class="block truncate text-[10px] text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400"></a>
+                        </div>
+                        <button id="closePanelBtn"
+                            class="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300">
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                    <div id="panelBody" class="panel-body">
+                        <p class="text-xs italic text-slate-500 dark:text-slate-400">Select a PR row to view detailed stats and refresh history.</p>
+                    </div>
+                </aside>
             </div>
         </main>
     </div>
-
-    <aside id="prDetailPanel">
-        <div class="panel-header">
-            <div class="min-w-0">
-                <div id="panelPrTitle" class="truncate text-xs font-bold text-slate-900 dark:text-slate-100">Select a PR</div>
-                <a id="panelPrLink" href="#" target="_blank" rel="noopener noreferrer"
-                    class="block truncate text-[10px] text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400"></a>
-            </div>
-            <button id="closePanelBtn"
-                class="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300">
-                <i class="fas fa-times text-xs"></i>
-            </button>
-        </div>
-        <div id="panelBody" class="panel-body">
-            <p class="text-xs italic text-slate-500 dark:text-slate-400">Select a PR row to view detailed stats and refresh history.</p>
-        </div>
-    </aside>
 
     <script>
         let currentRepo = localStorage.getItem('currentRepo') || 'all';
@@ -592,6 +631,53 @@
         let autoRefreshInterval = null;
         let prUpdateTimestamps = {}; // Track PR update timestamps for change detection
         const AUTO_REFRESH_INTERVAL = 30000; // 30 seconds
+        function getPrListScrollElement() {
+            return document.getElementById('prListPane');
+        }
+
+        function renderPanelPlaceholder(message) {
+            const panelBody = document.getElementById('panelBody');
+            if (panelBody) {
+                panelBody.innerHTML = `<p class="text-xs italic text-slate-500 dark:text-slate-400">${escapeHtml(message)}</p>`;
+            }
+        }
+
+        function updatePanelTopOffset() {
+            const headerEl = document.querySelector('header');
+            const headerHeight = headerEl ? Math.round(headerEl.getBoundingClientRect().height) : 64;
+            document.documentElement.style.setProperty('--panel-top-offset', `${headerHeight}px`);
+        }
+
+        function updateMainContentHeight() {
+            const mainContentEl = document.getElementById('mainContentArea');
+            if (!mainContentEl) return;
+
+            const topOffset = Math.max(0, Math.round(mainContentEl.getBoundingClientRect().top));
+            const availableHeight = Math.max(260, window.innerHeight - topOffset);
+            const heightPx = `${availableHeight}px`;
+            document.documentElement.style.setProperty('--main-content-height', heightPx);
+            // Apply directly as well to avoid any CSS var timing/fallback issues.
+            mainContentEl.style.height = heightPx;
+        }
+
+        function adjustPrTableHeight() {
+            const listPane = document.getElementById('prListPane');
+            const listContainer = document.getElementById('prListContainer');
+            const tableScroll = listContainer?.querySelector('.pr-table-scroll');
+            if (!listPane || !listContainer || !tableScroll) return;
+
+            const paneRect = listPane.getBoundingClientRect();
+            const tableRect = tableScroll.getBoundingClientRect();
+            const paginationEl = listContainer.querySelector('.pagination-wrapper');
+            const paginationReserve = paginationEl ? (paginationEl.offsetHeight + 16) : 12;
+            const availablePx = Math.floor(paneRect.bottom - tableRect.top - paginationReserve - 8);
+
+            if (availablePx > 220) {
+                tableScroll.style.maxHeight = `${availablePx}px`;
+            } else {
+                tableScroll.style.maxHeight = '60vh';
+            }
+        }
 
         // Helper functions for readiness data persistence
         function saveReadinessData(prId, readiness, reviewHealth) {
@@ -1058,7 +1144,7 @@
         async function loadPrs() {
             const container = document.getElementById('prListContainer');
             // Only show spinner if search is empty to avoid flickering while typing
-            if (document.getElementById('prSearchInput').value.trim() === '') {
+            if (document.getElementById('prSearchInput').value.trim() === '' && !container.querySelector('table')) {
                 container.innerHTML = `
                     <div class="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
                         <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500 dark:border-slate-600 dark:border-t-slate-400"></span>
@@ -1368,6 +1454,8 @@
         function renderPrList(prsToRender) {
             const container = document.getElementById('prListContainer');
             const prs = prsToRender || allPrs || [];
+            const listScrollContainer = getPrListScrollElement();
+            const previousMainScrollTop = listScrollContainer ? listScrollContainer.scrollTop : 0;
 
             if (prs.length === 0) {
                 const hasSearch = document.getElementById('prSearchInput').value.trim() !== '';
@@ -1379,6 +1467,9 @@
                         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Add a GitHub PR URL above to start tracking</p>
                     </div>
                 `;
+                if (listScrollContainer) {
+                    listScrollContainer.scrollTop = previousMainScrollTop;
+                }
                 return;
             }
 
@@ -1395,7 +1486,7 @@
                     const secondaryIcon = sortCol.direction === 'asc'
                         ? '<i class="fas fa-sort-up text-slate-500 dark:text-slate-400 ml-1" style="font-size:0.75em;"></i>'
                         : '<i class="fas fa-sort-down text-slate-500 dark:text-slate-400 ml-1" style="font-size:0.75em;"></i>';
-                    return `<sup class="text-xs text-slate-500 dark:text-slate-400">${number}</sup>${secondaryIcon}`;
+                    return secondaryIcon;
                 }
                 return '<i class="fas fa-sort text-slate-400 ml-1"></i>';
             };
@@ -1421,8 +1512,8 @@
                         <span class="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">${prs.length} PR${prs.length === 1 ? '' : 's'}</span>
                     </div>
                 </div>
-                <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-                    <table class="w-full table-fixed text-left text-sm">
+                <div class="pr-table-scroll overflow-x-auto overflow-y-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+                    <table class="w-full table-fixed min-w-[980px] text-left text-sm">
                         <thead class="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
                             <tr>
                                 <th class="cursor-pointer px-2 py-2 hover:bg-slate-100 dark:hover:bg-slate-900" data-sort-column="author_login" style="width:11%"><div class="flex items-center gap-1 truncate"><span class="truncate">Author</span> ${getSortIcon('author_login')}</div></th>
@@ -1433,7 +1524,7 @@
                                 <th class="cursor-pointer px-2 py-2 text-center hover:bg-slate-100 dark:hover:bg-slate-900" data-sort-column="ready" style="width:7%"><div class="flex items-center justify-center gap-1 truncate"><span class="truncate">Ready</span> ${getSortIcon('ready')}</div></th>
                                 <th class="cursor-pointer px-2 py-2 text-center hover:bg-slate-100 dark:hover:bg-slate-900" data-sort-column="ready_score" style="width:7%"><div class="flex items-center justify-center gap-1 truncate"><span class="truncate">Score</span> ${getSortIcon('ready_score')}</div></th>
                                 <th class="cursor-pointer px-2 py-2 hover:bg-slate-100 dark:hover:bg-slate-900" data-sort-column="last_updated_at" style="width:8%"><div class="flex items-center gap-1 truncate"><span class="truncate">Updated</span> ${getSortIcon('last_updated_at')}</div></th>
-                                <th class="px-2 py-2 text-center" style="width:6%">Action</th>
+                                <th class="px-2 py-2 text-center whitespace-nowrap" style="width:96px">Action</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 dark:divide-slate-700" id="prTableBody"></tbody>
@@ -1512,8 +1603,12 @@
                     await updatePr(prId, e.currentTarget);
                 });
             });
+            adjustPrTableHeight();
             if (document.getElementById('prSearchInput').value.trim() === '') {
                 renderPagination();
+            }
+            if (listScrollContainer) {
+                listScrollContainer.scrollTop = previousMainScrollTop;
             }
         }
 
@@ -1572,6 +1667,7 @@
         `;
 
             container.appendChild(paginationDiv);
+            adjustPrTableHeight();
 
             document.getElementById('prevPageBtn')?.addEventListener('click', () => {
                 if (currentPage > 1) {
@@ -1689,6 +1785,8 @@
         }
 
         function updateSinglePrRow(prId, prData) {
+            const listScrollContainer = getPrListScrollElement();
+            const previousMainScrollTop = listScrollContainer ? listScrollContainer.scrollTop : 0;
             const numericPrId = Number(prId);
             // Find and update the PR in allPrs array
             const prIndex = allPrs.findIndex(pr => pr.id === numericPrId);
@@ -1718,6 +1816,10 @@
             if (detailPrId === numericPrId) {
                 renderDetailPanelBody(numericPrId);
             }
+
+            if (listScrollContainer) {
+                listScrollContainer.scrollTop = previousMainScrollTop;
+            }
         }
 
         function openDetailPanel(pr) {
@@ -1741,23 +1843,21 @@
             }
 
             renderDetailPanelBody(pr.id);
-
-            const panel = document.getElementById('prDetailPanel');
-            const mainContent = document.getElementById('mainContentArea');
-            if (panel) panel.classList.add('open');
-            if (mainContent) mainContent.classList.add('panel-open');
         }
 
         function closeDetailPanel() {
-            const panel = document.getElementById('prDetailPanel');
-            const mainContent = document.getElementById('mainContentArea');
-            if (panel) panel.classList.remove('open');
-            if (mainContent) mainContent.classList.remove('panel-open');
-
             if (detailPrId) {
                 const row = document.getElementById(`pr-row-${detailPrId}`);
                 if (row) row.classList.remove('pr-row-active');
             }
+            const titleEl = document.getElementById('panelPrTitle');
+            const linkEl = document.getElementById('panelPrLink');
+            if (titleEl) titleEl.textContent = 'Select a PR';
+            if (linkEl) {
+                linkEl.href = '#';
+                linkEl.textContent = '';
+            }
+            renderPanelPlaceholder('Select a PR row to view detailed stats and refresh history.');
             detailPrId = null;
             activePrId = null;
         }
@@ -2407,8 +2507,16 @@
         });
 
         document.getElementById('closePanelBtn')?.addEventListener('click', closeDetailPanel);
+        window.addEventListener('resize', () => {
+            updatePanelTopOffset();
+            updateMainContentHeight();
+            adjustPrTableHeight();
+        });
 
         initTheme();
+        updatePanelTopOffset();
+        updateMainContentHeight();
+        adjustPrTableHeight();
         loadRateLimit();
         loadLatestRelease();
         loadRepos();
@@ -2431,4 +2539,3 @@
 </body>
 
 </html>
-
