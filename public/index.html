@@ -56,6 +56,7 @@
             min-height: 0;
             overflow: hidden;
             flex: 1;
+            min-width: 0;
             display: flex;
             flex-direction: column;
         }
@@ -66,8 +67,11 @@
             background: #fff;
             border: 1px solid #e2e8f0;
             border-radius: 12px;
-            min-height: 220px;
+            min-height: 0;
             height: 100%;
+            width: 360px;
+            flex: 0 0 360px;
+            overflow: hidden;
             max-height: none;
             box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.18);
         }
@@ -82,6 +86,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 8px;
+            flex-shrink: 0;
             padding: 10px 12px;
             border-bottom: 1px solid #e2e8f0;
         }
@@ -92,7 +97,9 @@
 
         .panel-body {
             flex: 1;
-            overflow: hidden;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
             padding: 12px;
         }
 
@@ -175,8 +182,8 @@
 
         @media (min-width: 1024px) {
             #analysisLayout {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) 360px;
+                display: flex;
+                flex-direction: row;
                 align-items: stretch;
                 min-height: 0;
             }
@@ -196,9 +203,7 @@
             }
 
             #prDetailPanel {
-                position: sticky;
-                top: var(--panel-top-offset, 64px);
-                align-self: start;
+                align-self: stretch;
                 border-left: 1px solid #334155;
             }
 
@@ -656,7 +661,7 @@
                 </div>
             </section>
 
-            <div id="analysisLayout">
+            <div id="analysisLayout" class="flex h-full min-h-0 overflow-hidden">
                 <div id="prListPane">
                     <div id="prListContainer">
                         <div
@@ -667,8 +672,8 @@
                         </div>
                     </div>
                 </div>
-                <aside id="prDetailPanel">
-                    <div class="panel-header">
+                <aside id="prDetailPanel" class="w-[360px] shrink-0 h-full min-h-0 flex flex-col">
+                    <div class="panel-header shrink-0">
                         <div class="min-w-0">
                             <div id="panelPrTitle" class="truncate text-xs font-bold text-slate-900 dark:text-slate-100">Select a PR</div>
                             <a id="panelPrLink" href="#" target="_blank" rel="noopener noreferrer"
@@ -679,7 +684,7 @@
                             <i class="fas fa-times text-xs"></i>
                         </button>
                     </div>
-                    <div id="panelBody" class="panel-body">
+                    <div id="panelBody" class="panel-body flex-1 min-h-0 overflow-y-auto">
                         <p class="text-xs italic text-slate-500 dark:text-slate-400">Select a PR row to view detailed stats and refresh history.</p>
                     </div>
                 </aside>
