@@ -1,7 +1,7 @@
 // Shared theme utilities for BLT-Leaf
 // - sets Tailwind config for dark mode
 // - applies the saved or preferred theme early to avoid FOUC
-// - provides `toggleTheme()` and initializes theme icons on DOM ready
+// - provides `toggleTheme()` and wires up theme icons/toggles on DOMContentLoaded
 
 window.tailwind = window.tailwind || {};
 window.tailwind.config = window.tailwind.config || {};
@@ -12,11 +12,18 @@ window.tailwind.config.darkMode = 'class';
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme === 'dark') {
             document.documentElement.classList.add('dark');
-        } else {
+        } else if (savedTheme === 'light') {
             document.documentElement.classList.remove('dark');
+        } else {
+            // No explicit saved theme: respect the OS/browser preference.
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
         }
     } catch (e) {
-        document.documentElement.classList.remove('dark');
+        // Storage unavailable — leave any theme class already set in the <head> as-is.
     }
 })();
 
@@ -41,10 +48,11 @@ function toggleTheme() {
     updateThemeIcons();
 }
 
-updateThemeIcons();
-
-document.querySelectorAll('[data-theme-toggle]')
-    .forEach(btn => btn.addEventListener('click', toggleTheme));
+document.addEventListener('DOMContentLoaded', function () {
+    updateThemeIcons();
+    document.querySelectorAll('[data-theme-toggle]')
+        .forEach(btn => btn.addEventListener('click', toggleTheme));
+});
 
 // Export for other scripts
 window.toggleTheme = toggleTheme;

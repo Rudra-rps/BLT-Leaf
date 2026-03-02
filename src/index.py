@@ -45,7 +45,13 @@ async def fetch_static_asset_with_cache_headers(request, env, path):
     headers = Headers.new(asset_response.headers)
     if is_local_dev_request(request):
         headers.set('Cache-Control', 'no-store')
+    elif path == '/' or path == '/sw.js' or path.endswith('.html'):
+        # HTML and the service worker must never be cached immutably — the browser
+        # must revalidate on every navigation to pick up new deployments and allow
+        # the service-worker update check to succeed.
+        headers.set('Cache-Control', 'no-cache, must-revalidate')
     else:
+        # Fingerprinted JS/CSS assets can be safely cached long-term.
         headers.set('Cache-Control', 'public, max-age=31536000, immutable')
 
     return Response.new(
