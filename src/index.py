@@ -3,6 +3,11 @@
 from js import Headers, Response, URL
 from slack_notifier import notify_slack_exception, notify_slack_error
 import json
+import re
+
+# Matches fingerprinted asset filenames produced by scripts/fingerprint.js.
+# Pattern:  <stem>.<8 hex chars>.<ext>  e.g. error-reporter.abc12345.js
+_FINGERPRINTED_RE = re.compile(r'\.[0-9a-f]{8}\.(js|css)$')
 # Import all handlers
 from handlers import (
     handle_add_pr,
@@ -50,9 +55,14 @@ async def fetch_static_asset_with_cache_headers(request, env, path):
         # must revalidate on every navigation to pick up new deployments and allow
         # the service-worker update check to succeed.
         headers.set('Cache-Control', 'no-cache, must-revalidate')
-    else:
-        # Fingerprinted JS/CSS assets can be safely cached long-term.
+    elif _FINGERPRINTED_RE.search(path):
+        # Fingerprinted assets: URL changes whenever content changes, so it is
+        # safe to cache them forever. Old URLs simply stop being referenced.
         headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+    else:
+        # Non-fingerprinted JS/CSS (e.g. sw.js already handled above):
+        # revalidate on every request so stale code is never served.
+        headers.set('Cache-Control', 'no-cache, must-revalidate')
 
     return Response.new(
         asset_response.body,

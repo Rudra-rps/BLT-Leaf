@@ -1,17 +1,24 @@
 // Service Worker - caches static assets, API responses, and HTML pages for faster loads.
 
-const CACHE_VERSION = 'blt-leaf-v2';
+// Bump this version whenever a new deployment ships new fingerprinted asset names.
+const CACHE_VERSION = 'blt-leaf-v3';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const CDN_CACHE = `${CACHE_VERSION}-cdn`;
 const IS_LOCAL_DEV = self.location.hostname === '127.0.0.1' || self.location.hostname === 'localhost';
 
-// Static assets to precache on install
+// Matches fingerprinted asset URLs produced by scripts/fingerprint.js.
+// e.g. /error-reporter.abc12345.js  /theme.abc12345.js
+const FINGERPRINTED_RE = /\/[^/]+\.[0-9a-f]{8}\.(js|css)(\?.*)?$/;
+
+// Static assets to precache on install.
+// Fingerprinted JS/CSS are NOT listed here — they are cached on first use by
+// the cacheFirst handler below and remain valid indefinitely because their URL
+// changes whenever their content changes.
 const PRECACHE_URLS = [
     '/',
     '/index.html',
     '/how-it-works.html',
-    '/how-it-works.js',
     '/static/logo.png'
 ];
 
@@ -141,6 +148,13 @@ self.addEventListener('fetch', (event) => {
         url.pathname === '/' ||
         url.pathname.endsWith('.html')) {
         event.respondWith(networkFirst(request, STATIC_CACHE));
+        return;
+    }
+
+    // Fingerprinted assets (immutable content) — cache forever on first fetch.
+    // Their URLs change with every content update so stale entries are never served.
+    if (FINGERPRINTED_RE.test(url.pathname)) {
+        event.respondWith(cacheFirst(request, STATIC_CACHE));
         return;
     }
 
