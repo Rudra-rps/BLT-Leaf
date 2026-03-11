@@ -20,8 +20,7 @@ Usage:
       --workflow-run-id 12345678 \\
       --repo owner/repo \\
       --github-token ghp_... \\
-      --collect-output /tmp/collect_output.json \\
-      [--db-path ...]
+      --collect-output /tmp/collect_output.json
 """
 
 import argparse
@@ -33,7 +32,7 @@ import time
 import requests
 
 sys.path.insert(0, os.path.dirname(__file__))
-from db_utils import get_db_connection
+from db_utils import get_d1_credentials, d1_query
 
 GITHUB_API      = 'https://api.github.com'
 POLL_INTERVAL_S = 30    # seconds between status polls
@@ -98,27 +97,26 @@ def fetch_job_conclusions(owner, repo, run_id, token):
     return conclusions
 
 
-def mark_flake_confirmed(conn, workflow_run_id, job_name, repo, new_attempt):
+def mark_flake_confirmed(account_id, db_id, token, workflow_run_id, job_name, repo, new_attempt):
     """
     Insert a flake_confirmed row by copying the original failure row's metadata
     and recording the rerun as a passing attempt.
     """
-    conn.execute(
+    d1_query(
+        account_id, db_id, token,
         """
         INSERT INTO ci_run_history
             (check_name, job_name, workflow_name, workflow_run_id, run_attempt,
              status, conclusion_category, commit_sha, pr_number, repo)
-        SELECT check_name, job_name, workflow_name, :run_id, :attempt,
+        SELECT check_name, job_name, workflow_name, ?, ?,
                'pass', 'flake_confirmed', commit_sha, pr_number, repo
         FROM ci_run_history
-        WHERE workflow_run_id = :run_id AND job_name = :job AND repo = :repo
+        WHERE workflow_run_id = ? AND job_name = ? AND repo = ?
         ORDER BY id DESC
         LIMIT 1
         """,
-        {'run_id': workflow_run_id, 'attempt': new_attempt,
-         'job': job_name, 'repo': repo},
+        [workflow_run_id, new_attempt, workflow_run_id, job_name, repo],
     )
-    conn.commit()
 
 
 def main():
@@ -131,7 +129,6 @@ def main():
     parser.add_argument('--collect-output', default=None,
                         help='Path to JSON file from collect_ci_results.py; '
                              'reads stdin if omitted')
-    parser.add_argument('--db-path', default=None)
     args = parser.parse_args()
 
     if args.collect_output:
@@ -158,7 +155,7 @@ def main():
         return 0
 
     owner, repo_name = args.repo.split('/', 1)
-    conn = get_db_connection(args.db_path)
+    account_id, db_id, token = get_d1_credentials()
 
     print(f'[retry] Triggering rerun-failed-jobs for run '
           f'{args.workflow_run_id}…', file=sys.stderr)
@@ -168,7 +165,6 @@ def main():
         for job in failed_jobs:
             result[job] = 'rerun_not_permitted'
         print(json.dumps(result))
-        conn.close()
         return 0
 
     _, new_attempt = poll_run_completion(
@@ -179,7 +175,6 @@ def main():
         for job in failed_jobs:
             result[job] = 'poll_timeout'
         print(json.dumps(result))
-        conn.close()
         return 0
 
     # Compare per-job outcomes from the rerun
@@ -191,13 +186,11 @@ def main():
         rerun_conclusion = job_conclusions.get(job, 'unknown')
         if rerun_conclusion == 'success':
             result[job] = 'confirmed_flake'
-            mark_flake_confirmed(conn, args.workflow_run_id, job, args.repo, new_attempt)
+            mark_flake_confirmed(account_id, db_id, token, args.workflow_run_id, job, args.repo, new_attempt)
             print(f'[retry] {job!r}: confirmed flake (passed on retry)', file=sys.stderr)
         else:
             result[job] = 'real_failure'
             print(f'[retry] {job!r}: real failure (failed again on retry)', file=sys.stderr)
-
-    conn.close()
     print(json.dumps(result))
     return 0
 

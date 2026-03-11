@@ -18,7 +18,6 @@ Usage:
       --github-token ghp_... \\
       [--pr-number 42] \\
       [--flaky-report /tmp/flaky_report.json] \\
-      [--db-path ...] \\
       [--no-github]
 """
 
@@ -31,7 +30,7 @@ from datetime import datetime, timezone
 import requests
 
 sys.path.insert(0, os.path.dirname(__file__))
-from db_utils import get_db_connection, load_config
+from db_utils import get_d1_credentials, d1_select, load_config
 
 GITHUB_API = 'https://api.github.com'
 _REPO_ROOT  = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -249,13 +248,12 @@ def main():
     parser.add_argument('--pr-number', type=int, default=None)
     parser.add_argument('--flaky-report', default=None,
                         help='Path to JSON from analyze_flakiness.py; reads stdin if omitted')
-    parser.add_argument('--db-path', default=None)
     parser.add_argument('--no-github', action='store_true',
                         help='Skip all GitHub API calls (useful for local testing)')
     args = parser.parse_args()
 
     config = load_config()
-    conn   = get_db_connection(args.db_path)
+    account_id, db_id, token = get_d1_credentials()
     owner, repo_name = args.repo.split('/', 1)
 
     # Load flaky report
@@ -302,12 +300,10 @@ def main():
             print(f'[report] Posted PR comment on #{args.pr_number}', file=sys.stderr)
 
     # --- Write local report files ---
-    all_scores = [
-        dict(r) for r in conn.execute(
-            'SELECT * FROM flakiness_scores ORDER BY flakiness_score DESC'
-        ).fetchall()
-    ]
-    conn.close()
+    all_scores = d1_select(
+        account_id, db_id, token,
+        'SELECT * FROM flakiness_scores ORDER BY flakiness_score DESC',
+    )
 
     os.makedirs(DATA_DIR, exist_ok=True)
 

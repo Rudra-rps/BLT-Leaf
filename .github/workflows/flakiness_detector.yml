@@ -21,7 +21,6 @@ on:
         type: string
 
 permissions:
-  contents: write        # commit flakiness_history.db back to repo
   issues: write          # create / reopen / comment on flaky-test issues
   pull-requests: write   # post flakiness summary comment on PRs
   actions: write         # trigger rerun-failed-jobs
@@ -39,13 +38,10 @@ jobs:
 
     steps:
       # -----------------------------------------------------------------------
-      # 1. Checkout (full history so we can commit the updated SQLite DB)
+      # 1. Checkout
       # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
       # 2. Python + dependencies
@@ -78,10 +74,14 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # 4. Collect CI results → writes ci_run_history rows, outputs failed jobs
+      # 4. Collect CI results → writes ci_run_history rows to D1, outputs failed jobs
       # -----------------------------------------------------------------------
       - name: Collect CI results
         id: collect
+        env:
+          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python scripts/flakiness/collect_ci_results.py \
             --workflow-run-id "${{ steps.meta.outputs.run_id }}" \
@@ -104,6 +104,10 @@ jobs:
       - name: Retry failed jobs
         id: retry
         if: steps.collect.outputs.has_failures == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python scripts/flakiness/retry_failures.py \
             --workflow-run-id "${{ steps.meta.outputs.run_id }}" \
@@ -113,10 +117,14 @@ jobs:
           | tee /tmp/retry_output.json
 
       # -----------------------------------------------------------------------
-      # 6. Re-collect after retry so flake_confirmed rows are recorded
+      # 6. Re-collect after retry so flake_confirmed rows are recorded in D1
       # -----------------------------------------------------------------------
       - name: Re-collect after retry
         if: steps.collect.outputs.has_failures == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python scripts/flakiness/collect_ci_results.py \
             --workflow-run-id "${{ steps.meta.outputs.run_id }}" \
@@ -126,10 +134,14 @@ jobs:
           > /dev/null
 
       # -----------------------------------------------------------------------
-      # 7. Analyse flakiness → upserts flakiness_scores, outputs classification
+      # 7. Analyse flakiness → upserts flakiness_scores in D1, outputs classification
       # -----------------------------------------------------------------------
       - name: Analyse flakiness
         id: analyze
+        env:
+          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python scripts/flakiness/analyze_flakiness.py \
             --repo "${{ steps.meta.outputs.repo }}" \
@@ -146,6 +158,10 @@ jobs:
       # 8. Report flakiness to GitHub Issues / PR comment, write local files
       # -----------------------------------------------------------------------
       - name: Report flakiness
+        env:
+          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python scripts/flakiness/report_flakiness.py \
             --repo         "${{ steps.meta.outputs.repo }}" \
@@ -154,39 +170,14 @@ jobs:
             --flaky-report /tmp/flaky_report.json
 
       # -----------------------------------------------------------------------
-      # 9. Sync to Cloudflare D1
+      # 9. Upload report artifacts (flakiness_report.md + flakiness_metrics.json)
       # -----------------------------------------------------------------------
-      - name: Sync to Cloudflare D1
-        if: >
-          env.CLOUDFLARE_ACCOUNT_ID != '' &&
-          env.CLOUDFLARE_D1_DATABASE_ID != '' &&
-          env.CLOUDFLARE_API_TOKEN != ''
-        env:
-          CLOUDFLARE_ACCOUNT_ID:    ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
-          CLOUDFLARE_API_TOKEN:     ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          python scripts/flakiness/sync_to_d1.py \
-            --workflow-run-id "${{ steps.meta.outputs.run_id }}"
-
-      # -----------------------------------------------------------------------
-      # 10. Commit updated SQLite DB + report files back to the branch
-      # -----------------------------------------------------------------------
-      - name: Commit flakiness data
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add \
-            data/flakiness_history.db \
-            data/flakiness_report.md \
-            data/flakiness_metrics.json \
-            || true  # no-op if files don't exist yet
-
-          # Only commit if there are staged changes
-          if git diff --cached --quiet; then
-            echo "No flakiness data changes to commit."
-          else
-            git commit -m "chore: update flakiness history [skip ci]"
-            git push
-          fi
+      - name: Upload flakiness artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flakiness-report
+          path: |
+            data/flakiness_report.md
+            data/flakiness_metrics.json
+          if-no-files-found: ignore
