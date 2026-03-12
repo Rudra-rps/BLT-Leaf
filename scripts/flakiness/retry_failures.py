@@ -129,10 +129,12 @@ def main():
     parser.add_argument('--collect-output', default=None,
                         help='Path to JSON file from collect_ci_results.py; '
                              'reads stdin if omitted')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Simulate retry without any GitHub or D1 calls')
     args = parser.parse_args()
 
     if args.collect_output:
-        with open(args.collect_output, encoding='utf-8') as fh:
+        with open(args.collect_output, encoding='utf-8-sig') as fh:
             collect_data = json.load(fh)
     else:
         collect_data = json.loads(sys.stdin.read())
@@ -142,6 +144,29 @@ def main():
     result = {}
 
     if not failed_jobs:
+        print(json.dumps(result))
+        return 0
+
+    # --- Dry-run: simulate the retry without touching GitHub or D1 ---
+    if args.dry_run:
+        print('[dry-run] Dry run enabled — simulating retry, skipping GitHub/D1 calls',
+              file=sys.stderr)
+        if run_attempt > 1:
+            print(f'[dry-run] run_attempt={run_attempt} — already retried, skipping.',
+                  file=sys.stderr)
+            for job in failed_jobs:
+                result[job] = 'skipped_already_retried'
+        else:
+            print(f'[dry-run] Simulating rerun-failed-jobs for run '
+                  f'{args.workflow_run_id}…', file=sys.stderr)
+            for job in failed_jobs:
+                print(f'[retry] Retrying failed job: {job}', file=sys.stderr)
+                print(f'[retry] Simulated retry result: success', file=sys.stderr)
+                result[job] = 'confirmed_flake'
+                print(f'[retry] Marked as flaky: {job!r} (passed on retry — '
+                      'skipping D1 write)', file=sys.stderr)
+            n_flakes = len([v for v in result.values() if v == 'confirmed_flake'])
+            print(f'[dry-run] {n_flakes} flaky job(s) confirmed', file=sys.stderr)
         print(json.dumps(result))
         return 0
 

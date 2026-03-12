@@ -112,16 +112,33 @@ def main():
 
     owner, repo_name = args.repo.split('/', 1)
 
-    account_id, db_id, token = get_d1_credentials()
-    infra_patterns = get_infra_patterns(account_id, db_id, token)
-    config = load_config()
-
-    run_meta = fetch_run_meta(owner, repo_name, args.workflow_run_id, args.github_token)
-    run_attempt = run_meta.get('run_attempt', 1)
-    workflow_name = run_meta.get('name', 'unknown')
-    commit_sha = args.commit_sha or run_meta.get('head_sha', '')
-
-    jobs = fetch_jobs(owner, repo_name, args.workflow_run_id, args.github_token)
+    if args.dry_run:
+        print('[dry-run] Dry run enabled — using synthetic data, skipping all external calls',
+              file=sys.stderr)
+        config         = load_config()
+        infra_patterns = ['econnreset', 'timed_out', 'timeout', 'rate limit',
+                          'etimedout', 'fetch failed', 'network error']
+        run_attempt    = 1
+        workflow_name  = 'PR Validation'
+        commit_sha     = args.commit_sha or 'abc123deadbeef'
+        jobs = [
+            {'name': 'test-suite',        'conclusion': 'failure',
+             'steps': [{'name': 'Run tests', 'conclusion': 'failure'}]},
+            {'name': 'build',             'conclusion': 'success', 'steps': []},
+            {'name': 'lint',              'conclusion': 'success', 'steps': []},
+            {'name': 'type-check',        'conclusion': 'success', 'steps': []},
+            {'name': 'integration-tests', 'conclusion': 'success', 'steps': []},
+            {'name': 'deploy-preview',    'conclusion': 'success', 'steps': []},
+        ]
+    else:
+        account_id, db_id, token = get_d1_credentials()
+        infra_patterns = get_infra_patterns(account_id, db_id, token)
+        config = load_config()
+        run_meta      = fetch_run_meta(owner, repo_name, args.workflow_run_id, args.github_token)
+        run_attempt   = run_meta.get('run_attempt', 1)
+        workflow_name = run_meta.get('name', 'unknown')
+        commit_sha    = args.commit_sha or run_meta.get('head_sha', '')
+        jobs = fetch_jobs(owner, repo_name, args.workflow_run_id, args.github_token)
 
     rows = []
     failed_jobs = []
@@ -178,6 +195,14 @@ def main():
             "DELETE FROM ci_run_history WHERE timestamp < datetime('now', ?)",
             [f'-{prune_days} days'],
         )
+    else:
+        print(f'[dry-run] Collected {len(rows)} CI jobs '
+              f'({len(failed_jobs)} test failure(s)) — skipping D1 writes',
+              file=sys.stderr)
+        for r in rows:
+            icon = '\u2713' if r['status'] == 'pass' else '\u2717'
+            print(f'[dry-run]   {icon} {r["job_name"]:30s}  {r["conclusion_category"]}',
+                  file=sys.stderr)
 
     output = {
         'failed_jobs': failed_jobs,

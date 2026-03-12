@@ -250,18 +250,47 @@ def main():
                         help='Path to JSON from analyze_flakiness.py; reads stdin if omitted')
     parser.add_argument('--no-github', action='store_true',
                         help='Skip all GitHub API calls (useful for local testing)')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Skip D1 reads and all GitHub calls; write report files only')
     args = parser.parse_args()
 
     config = load_config()
-    account_id, db_id, token = get_d1_credentials()
+
+    if not args.dry_run:
+        account_id, db_id, token = get_d1_credentials()
     owner, repo_name = args.repo.split('/', 1)
 
     # Load flaky report
     if args.flaky_report:
         with open(args.flaky_report, encoding='utf-8') as fh:
             report = json.load(fh)
-    else:
+    elif not args.dry_run:
         report = json.loads(sys.stdin.read())
+    else:
+        # dry-run with no file: use synthetic data
+        print('[dry-run] No --flaky-report supplied; using synthetic data', file=sys.stderr)
+        report = {
+            'flaky': [
+                {'check_name': 'test-suite', 'job_name': 'test-suite',
+                 'workflow_name': 'PR Validation', 'classification': 'flaky',
+                 'flakiness_score': 0.15, 'severity': 'low',
+                 'total_runs': 20, 'failure_count': 3, 'flaky_failures': 1,
+                 'consecutive_failures': 0},
+                {'check_name': 'integration-tests', 'job_name': 'integration-tests',
+                 'workflow_name': 'PR Validation', 'classification': 'flaky',
+                 'flakiness_score': 0.10, 'severity': 'low',
+                 'total_runs': 20, 'failure_count': 2, 'flaky_failures': 1,
+                 'consecutive_failures': 0},
+            ],
+            'deterministic': [],
+            'stable': [
+                {'check_name': 'build', 'job_name': 'build',
+                 'workflow_name': 'PR Validation', 'classification': 'stable',
+                 'flakiness_score': 0.0, 'severity': 'stable',
+                 'total_runs': 20, 'failure_count': 0, 'flaky_failures': 0,
+                 'consecutive_failures': 0},
+            ],
+        }
 
     flaky_entries = report.get('flaky', [])
     label_flaky   = config.get('labels', {}).get('flaky_test',     'flaky-test')
@@ -269,7 +298,7 @@ def main():
     prefix        = config.get('github', {}).get('issue_title_prefix', '[Flaky Test]')
 
     # --- GitHub Issue automation ---
-    if not args.no_github and args.github_token:
+    if not args.no_github and not args.dry_run and args.github_token:
         for entry in flaky_entries:
             check_name = entry['check_name']
             existing   = search_flaky_issue(
@@ -300,10 +329,19 @@ def main():
             print(f'[report] Posted PR comment on #{args.pr_number}', file=sys.stderr)
 
     # --- Write local report files ---
-    all_scores = d1_select(
-        account_id, db_id, token,
-        'SELECT * FROM flakiness_scores ORDER BY flakiness_score DESC',
-    )
+    if args.dry_run:
+        print('[dry-run] Dry run enabled — skipping D1 reads, building report from input',
+              file=sys.stderr)
+        all_scores = (
+            report.get('flaky', [])
+            + report.get('deterministic', [])
+            + report.get('stable', [])
+        )
+    else:
+        all_scores = d1_select(
+            account_id, db_id, token,
+            'SELECT * FROM flakiness_scores ORDER BY flakiness_score DESC',
+        )
 
     os.makedirs(DATA_DIR, exist_ok=True)
 

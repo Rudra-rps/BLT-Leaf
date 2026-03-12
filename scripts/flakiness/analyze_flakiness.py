@@ -117,83 +117,153 @@ def main():
     parser.add_argument('--repo', required=True, help='owner/repo')
     parser.add_argument('--check-name', default=None,
                         help='Limit analysis to a single check name')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Use synthetic 20-run history, skip all D1 calls')
     args = parser.parse_args()
 
-    account_id, db_id, token = get_d1_credentials()
     config = load_config()
-
-    # Distinct (check_name, job_name, workflow_name) combos for this repo
-    base_sql = """
-        SELECT DISTINCT check_name, job_name, workflow_name
-        FROM ci_run_history
-        WHERE repo = ?
-    """
-    params = [args.repo]
-    if args.check_name:
-        base_sql += ' AND check_name = ?'
-        params.append(args.check_name)
-
-    combos = d1_select(account_id, db_id, token, base_sql, params)
-
     report = {'flaky': [], 'deterministic': [], 'stable': []}
 
-    for combo in combos:
-        check_name    = combo['check_name']
-        job_name      = combo['job_name']
-        workflow_name = combo['workflow_name']
+    if args.dry_run:
+        print('[dry-run] Dry run enabled — using synthetic 20-run history, skipping D1',
+              file=sys.stderr)
 
-        # Fetch full ordered history for this combo
-        history = d1_select(
-            account_id, db_id, token,
-            """
-            SELECT status, conclusion_category
+        def _p():
+            return {'status': 'pass', 'conclusion_category': 'pass'}
+
+        def _f():
+            return {'status': 'fail', 'conclusion_category': 'test_failure'}
+
+        # test-suite:        17 pass + 3 fail (scattered) → 15% → flaky/low
+        # build:             20 pass → 0% → stable
+        # integration-tests: 18 pass + 2 fail (scattered) → 10% → flaky/low
+        synthetic = [
+            {
+                'check_name': 'test-suite', 'job_name': 'test-suite',
+                'workflow_name': 'PR Validation',
+                'history': (
+                    [_p()] * 6 + [_f()] + [_p()] * 4 + [_f()] + [_p()] * 5 + [_f()] + [_p()] * 2
+                ),
+            },
+            {
+                'check_name': 'build', 'job_name': 'build',
+                'workflow_name': 'PR Validation',
+                'history': [_p()] * 20,
+            },
+            {
+                'check_name': 'integration-tests', 'job_name': 'integration-tests',
+                'workflow_name': 'PR Validation',
+                'history': [_p()] * 9 + [_f()] + [_p()] * 9 + [_f()],
+            },
+        ]
+
+        for combo in synthetic:
+            if args.check_name and combo['check_name'] != args.check_name:
+                continue
+            check_name    = combo['check_name']
+            job_name      = combo['job_name']
+            workflow_name = combo['workflow_name']
+            history       = combo['history']
+
+            print(f'[dry-run] Analyzing {len(history)} runs for {check_name!r}',
+                  file=sys.stderr)
+            result = analyze_check(history, config)
+            if result is None:
+                print(f'[dry-run]   → insufficient data (need ≥5 runs)', file=sys.stderr)
+                continue
+
+            score_pct = f'{result["flakiness_score"]:.0%}' if result['flakiness_score'] else '0%'
+            print(
+                f'[dry-run]   {check_name} \u2192 {result["classification"]} '
+                f'(score={score_pct}, severity={result["severity"]})',
+                file=sys.stderr,
+            )
+            print(f'[dry-run]   Skipping D1 upsert for {check_name!r}', file=sys.stderr)
+
+            entry = {'check_name': check_name, 'job_name': job_name,
+                     'workflow_name': workflow_name, **result}
+            report[result['classification']].append(entry)
+
+        n_flaky = len(report['flaky'])
+        n_det   = len(report['deterministic'])
+        n_stab  = len(report['stable'])
+        total   = n_flaky + n_det + n_stab
+        print(
+            f'[dry-run] Flakiness score computed for {total} checks '
+            f'({n_flaky} flaky, {n_det} deterministic, {n_stab} stable)',
+            file=sys.stderr,
+        )
+
+    else:
+        account_id, db_id, token = get_d1_credentials()
+
+        base_sql = """
+            SELECT DISTINCT check_name, job_name, workflow_name
             FROM ci_run_history
-            WHERE repo = ? AND check_name = ? AND job_name = ?
-            ORDER BY timestamp ASC
-            """,
-            [args.repo, check_name, job_name],
-        )
+            WHERE repo = ?
+        """
+        params = [args.repo]
+        if args.check_name:
+            base_sql += ' AND check_name = ?'
+            params.append(args.check_name)
 
-        result = analyze_check(history, config)
-        if result is None:
-            continue  # not enough data yet
+        combos = d1_select(account_id, db_id, token, base_sql, params)
 
-        # Upsert into flakiness_scores
-        d1_query(
-            account_id, db_id, token,
-            """
-            INSERT INTO flakiness_scores
-                (check_name, job_name, workflow_name, flakiness_score, severity,
-                 classification, total_runs, failure_count, flaky_failures,
-                 consecutive_failures, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(check_name, job_name) DO UPDATE SET
-                workflow_name        = excluded.workflow_name,
-                flakiness_score      = excluded.flakiness_score,
-                severity             = excluded.severity,
-                classification       = excluded.classification,
-                total_runs           = excluded.total_runs,
-                failure_count        = excluded.failure_count,
-                flaky_failures       = excluded.flaky_failures,
-                consecutive_failures = excluded.consecutive_failures,
-                last_updated         = excluded.last_updated
-            """,
-            [
-                check_name, job_name, workflow_name,
-                result['flakiness_score'], result['severity'],
-                result['classification'], result['total_runs'],
-                result['failure_count'], result['flaky_failures'],
-                result['consecutive_failures'],
-            ],
-        )
+        for combo in combos:
+            check_name    = combo['check_name']
+            job_name      = combo['job_name']
+            workflow_name = combo['workflow_name']
 
-        entry = {
-            'check_name':    check_name,
-            'job_name':      job_name,
-            'workflow_name': workflow_name,
-            **result,
-        }
-        report[result['classification']].append(entry)
+            history = d1_select(
+                account_id, db_id, token,
+                """
+                SELECT status, conclusion_category
+                FROM ci_run_history
+                WHERE repo = ? AND check_name = ? AND job_name = ?
+                ORDER BY timestamp ASC
+                """,
+                [args.repo, check_name, job_name],
+            )
+
+            result = analyze_check(history, config)
+            if result is None:
+                continue
+
+            d1_query(
+                account_id, db_id, token,
+                """
+                INSERT INTO flakiness_scores
+                    (check_name, job_name, workflow_name, flakiness_score, severity,
+                     classification, total_runs, failure_count, flaky_failures,
+                     consecutive_failures, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(check_name, job_name) DO UPDATE SET
+                    workflow_name        = excluded.workflow_name,
+                    flakiness_score      = excluded.flakiness_score,
+                    severity             = excluded.severity,
+                    classification       = excluded.classification,
+                    total_runs           = excluded.total_runs,
+                    failure_count        = excluded.failure_count,
+                    flaky_failures       = excluded.flaky_failures,
+                    consecutive_failures = excluded.consecutive_failures,
+                    last_updated         = excluded.last_updated
+                """,
+                [
+                    check_name, job_name, workflow_name,
+                    result['flakiness_score'], result['severity'],
+                    result['classification'], result['total_runs'],
+                    result['failure_count'], result['flaky_failures'],
+                    result['consecutive_failures'],
+                ],
+            )
+
+            entry = {
+                'check_name':    check_name,
+                'job_name':      job_name,
+                'workflow_name': workflow_name,
+                **result,
+            }
+            report[result['classification']].append(entry)
 
     print(json.dumps(report, indent=2))
     return 0
