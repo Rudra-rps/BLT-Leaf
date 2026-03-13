@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS flakiness_scores_v2 (
     PRIMARY KEY (repo, workflow_name, check_name, job_name)
 );
 
+-- INNER JOIN is intentional: the old flakiness_scores table has no repo column,
+-- so orphaned scores (with no matching ci_run_history rows) cannot supply a repo
+-- value and would violate the NOT NULL constraint. They are dropped here as stale.
 INSERT INTO flakiness_scores_v2 (
     repo, workflow_name, check_name, job_name, flakiness_score, severity,
     classification, total_runs, failure_count, flaky_failures,
