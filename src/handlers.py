@@ -15,11 +15,10 @@ from utils import (
 from cache import (
     check_rate_limit, get_readiness_cache, set_readiness_cache,
     invalidate_readiness_cache, invalidate_timeline_cache, get_rate_limit_cache,
-    get_cached_flakiness_scores,
     _READINESS_CACHE_TTL, _RATE_LIMIT_CACHE_TTL, _READINESS_RATE_LIMIT,
     _READINESS_RATE_WINDOW, _rate_limit_cache
 )
-from database import get_db, upsert_pr
+from database import get_db, upsert_pr, get_all_flakiness_scores
 from github_api import (
     fetch_pr_data, fetch_pr_timeline_data, fetch_paginated_data,
     verify_github_signature, fetch_multiple_prs_batch, fetch_org_repos
@@ -1585,8 +1584,8 @@ async def _run_readiness_analysis(env, pr, pr_id, github_token):
         # Classify review health
         review_classification, review_score = classify_review_health(review_data)
         
-        # Load flakiness scores from D1 (60-min in-memory cache, graceful fallback)
-        flakiness_scores = await get_cached_flakiness_scores(env)
+        # Load flakiness scores from D1 (graceful fallback on missing table)
+        flakiness_scores = await get_all_flakiness_scores(get_db(env))
 
         # Calculate combined readiness
         readiness = calculate_pr_readiness(

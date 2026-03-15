@@ -21,21 +21,27 @@ CREATE TABLE IF NOT EXISTS ci_run_history (
 CREATE INDEX IF NOT EXISTS idx_ci_run_history_lookup
     ON ci_run_history(check_name, job_name, repo, timestamp);
 
--- Computed flakiness scores per (check_name, job_name) pair
+-- Computed flakiness scores per (repo, workflow_name, check_name, job_name) tuple
 CREATE TABLE IF NOT EXISTS flakiness_scores (
-    check_name            TEXT    NOT NULL,
-    job_name              TEXT    NOT NULL,
-    workflow_name         TEXT    NOT NULL,
-    flakiness_score       REAL    NOT NULL DEFAULT 0.0,     -- 0.0 – 1.0
-    severity              TEXT    NOT NULL DEFAULT 'stable', -- 'stable' | 'low' | 'medium' | 'high' | 'deterministic'
-    classification        TEXT    NOT NULL DEFAULT 'stable', -- 'stable' | 'flaky' | 'deterministic'
-    total_runs            INTEGER NOT NULL DEFAULT 0,
-    failure_count         INTEGER NOT NULL DEFAULT 0,
-    flaky_failures        INTEGER NOT NULL DEFAULT 0,        -- failures that passed on re-run
-    consecutive_failures  INTEGER NOT NULL DEFAULT 0,        -- current streak of consecutive failures
-    last_updated          TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (check_name, job_name)
+    repo                 TEXT    NOT NULL,                   -- "owner/repo" format
+    workflow_name        TEXT    NOT NULL,
+    check_name           TEXT    NOT NULL,
+    job_name             TEXT    NOT NULL,
+    flakiness_score      REAL    NOT NULL DEFAULT 0.0,       -- 0.0 – 1.0
+    severity             TEXT    NOT NULL DEFAULT 'stable',  -- 'stable' | 'low' | 'medium' | 'high' | 'deterministic'
+    classification       TEXT    NOT NULL DEFAULT 'stable',  -- 'stable' | 'flaky' | 'deterministic'
+    total_runs           INTEGER NOT NULL DEFAULT 0,
+    failure_count        INTEGER NOT NULL DEFAULT 0,
+    flaky_failures       INTEGER NOT NULL DEFAULT 0,         -- failures that passed on re-run
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,         -- current streak of consecutive failures
+    last_updated         TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, workflow_name, check_name, job_name)
 );
+
+CREATE INDEX IF NOT EXISTS idx_flakiness_scores_repo
+    ON flakiness_scores(repo);
+CREATE INDEX IF NOT EXISTS idx_flakiness_scores_lookup
+    ON flakiness_scores(repo, workflow_name, check_name, job_name);
 
 -- Seed patterns used to classify infrastructure failures separately from test flakiness
 CREATE TABLE IF NOT EXISTS known_infrastructure_issues (
