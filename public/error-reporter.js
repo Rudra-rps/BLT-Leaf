@@ -43,6 +43,14 @@
         return clean;
     }
 
+    function getPageUrl() {
+        try {
+            return location.origin + location.pathname;
+        } catch (e) {
+            return location.pathname || '';
+        }
+    }
+
     function sendPayload(payload) {
         try {
             var body = JSON.stringify(payload);
@@ -84,12 +92,17 @@
         var target = event.target || {};
         var resourceUrl = target.src || target.href;
 
-        if (resourceUrl && (target.tagName === 'SCRIPT' || target.tagName === 'LINK' || target.tagName === 'IMG')) {
+        var shouldReportResource =
+            target.tagName === 'SCRIPT' ||
+            target.tagName === 'LINK' ||
+            (target.tagName === 'IMG' && !target.hasAttribute('onerror') && !target.hasAttribute('data-ignore-error'));
+
+        if (resourceUrl && shouldReportResource) {
             reportError(
                 'ResourceError',
                 'Failed to load or execute resource',
                 (event.error && event.error.stack) || '',
-                { url: location.href, resource: resourceUrl }
+                { url: getPageUrl(), resource: resourceUrl }
             );
             return;
         }
@@ -99,7 +112,7 @@
             (event.error && event.error.name) || 'Error',
             event.message || (event.error && event.error.message) || String(event.error) || 'Unknown error',
             (event.error && event.error.stack) || '',
-            { url: location.href, line: event.lineno, col: event.colno }
+            { url: getPageUrl(), line: event.lineno, col: event.colno }
         );
     }, true);
 
@@ -110,7 +123,7 @@
             (reason.name) || 'UnhandledRejection',
             reason.message || String(reason),
             reason.stack || '',
-            { url: location.href }
+            { url: getPageUrl() }
         );
     });
 
@@ -130,7 +143,7 @@
                         (primary.name || 'ConsoleError') + ': ' + (primary.message || ''),
                         primary.stack || '',
                         {
-                            url: location.href,
+                            url: getPageUrl(),
                             source: 'console.error:unhandled',
                             report_channel: 'dedupe-candidate',
                             error_count: String(errors.length),

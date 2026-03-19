@@ -28,7 +28,7 @@
             }
         })();
     </script>
-    <script src="/error-reporter.9455923c.js" defer></script>
+    <script src="/error-reporter.9455923c.js"></script>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
@@ -3652,12 +3652,38 @@
             }
         }
 
-        if (typeof window.updateThemeIcons === 'function') {
-            window.updateThemeIcons();
+        async function setupServiceWorkerForEnvironment() {
+            if (!('serviceWorker' in navigator)) {
+                return;
+            }
+
+            const isLocalDev = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+            if (isLocalDev) {
+                try {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(registrations.map(reg => reg.unregister()));
+                } catch (err) {
+                    console.warn('SW unregister failed:', err);
+                }
+
+                if ('caches' in window) {
+                    try {
+                        const keys = await caches.keys();
+                        await Promise.all(keys.map(key => caches.delete(key)));
+                    } catch (err) {
+                        console.warn('Cache clear failed:', err);
+                    }
+                }
+                return;
+            }
+
+            try {
+                const reg = await navigator.serviceWorker.register('/sw.js');
+                console.log('SW Registered:', reg.scope);
+            } catch (err) {
+                console.warn('SW Registration failed:', err);
+            }
         }
-        loadAuthState();
-        loadRateLimit();
-        loadLatestRelease();
 
         // Handle Refresh All Org button in the sidebar
         (function initRefreshAllOrgBtn() {
@@ -3826,35 +3852,28 @@
         initOrgFilter();
         // initAuthorFilter sets up event listeners only; dropdown items are populated from /api/authors.
         initAuthorFilter();
-        loadRepos();
-        loadAuthors();
-        loadPrs().then(handlePrUrlParam);
-        setInterval(loadRateLimit, 600000);
 
-        // Initialize auto-refresh
-        updateAutoRefreshUI();
-        if (autoRefreshEnabled) {
-            startAutoRefresh();
-        }
-
-        // Service Worker Registration
-        if ('serviceWorker' in navigator) {
-            const isLocalDev = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
-            if (isLocalDev) {
-                navigator.serviceWorker.getRegistrations()
-                    .then(registrations => Promise.all(registrations.map(reg => reg.unregister())))
-                    .catch(err => console.warn('SW unregister failed:', err));
-                if ('caches' in window) {
-                    caches.keys()
-                        .then(keys => Promise.all(keys.map(key => caches.delete(key))))
-                        .catch(err => console.warn('Cache clear failed:', err));
-                }
-            } else {
-                navigator.serviceWorker.register('/sw.js')
-                    .then(reg => console.log('SW Registered:', reg.scope))
-                    .catch(err => console.warn('SW Registration failed:', err));
+        (async function bootstrapPageData() {
+            if (typeof window.updateThemeIcons === 'function') {
+                window.updateThemeIcons();
             }
-        }
+
+            await setupServiceWorkerForEnvironment();
+
+            loadAuthState();
+            loadRateLimit();
+            loadLatestRelease();
+            loadRepos();
+            loadAuthors();
+            loadPrs().then(handlePrUrlParam);
+            setInterval(loadRateLimit, 600000);
+
+            // Initialize auto-refresh
+            updateAutoRefreshUI();
+            if (autoRefreshEnabled) {
+                startAutoRefresh();
+            }
+        })();
     </script>
 
     <!-- Footer -->
