@@ -32,7 +32,6 @@ const CDN_ORIGINS = [
 const CACHEABLE_API_PATHS = [
     '/api/prs',
     '/api/repos',
-    '/api/rate-limit',
     '/api/status'
 ];
 
@@ -95,6 +94,19 @@ self.addEventListener('fetch', (event) => {
             url.pathname.endsWith('.html')
         )) {
         event.respondWith(fetch(request, { cache: 'no-store' }));
+        return;
+    }
+
+    // Auth endpoints must bypass service-worker caching/interception because
+    // OAuth relies on network redirects and Set-Cookie propagation.
+    if (url.origin === self.location.origin && url.pathname.startsWith('/api/auth/')) {
+        // Do not intercept auth flows at all; let browser perform normal
+        // navigation so redirects and cookies are handled natively.
+        return;
+    }
+
+    // Rate-limit response is token/cookie-dependent and must always be fresh.
+    if (url.origin === self.location.origin && url.pathname === '/api/rate-limit') {
         return;
     }
 

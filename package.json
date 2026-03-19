@@ -25,6 +25,6 @@
   "author": "OWASP BLT",
   "license": "MIT",
   "devDependencies": {
-    "wrangler": "^4.64.0"
+    "wrangler": "^4.75.0"
   }
 }
