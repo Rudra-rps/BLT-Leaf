@@ -18,6 +18,31 @@
         return str;
     }
 
+    function sanitizeText(text, maxLen) {
+        return safeTruncate(redactSensitive(text), maxLen);
+    }
+
+    function sanitizeExtra(extra) {
+        var clean = {};
+        var source = extra || {};
+
+        Object.keys(source).forEach(function (key) {
+            var value = source[key];
+            if (value == null) {
+                clean[key] = value;
+                return;
+            }
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                clean[key] = sanitizeText(value, 500);
+                return;
+            }
+            // Avoid serializing arbitrary objects into error telemetry.
+            clean[key] = '[redacted-object]';
+        });
+
+        return clean;
+    }
+
     function sendPayload(payload) {
         try {
             var body = JSON.stringify(payload);
@@ -43,8 +68,12 @@
 
     function reportError(errorType, message, stack, extra) {
         var payload = Object.assign(
-            { error_type: errorType, message: message, stack: stack || '' },
-            extra || {}
+            {
+                error_type: sanitizeText(errorType || 'Error', 100),
+                message: sanitizeText(message || 'Unknown error', 300),
+                stack: sanitizeText(stack || '', 2000),
+            },
+            sanitizeExtra(extra)
         );
         sendPayload(payload);
     }
@@ -96,12 +125,10 @@
 
                 if (errors.length > 0) {
                     var primary = errors[0];
-                    var message = redactSensitive(primary.name + ': ' + (primary.message || ''));
-                    var stack = redactSensitive(primary.stack || '');
                     reportError(
                         primary.name || 'ConsoleError',
-                        safeTruncate(message, 300),
-                        safeTruncate(stack || message, 2000),
+                        (primary.name || 'ConsoleError') + ': ' + (primary.message || ''),
+                        primary.stack || '',
                         {
                             url: location.href,
                             source: 'console.error:unhandled',
